@@ -88,3 +88,72 @@ func TestOrChan(t *testing.T) {
 	<-or(sig(3*time.Second), sig(6*time.Second), sig(8*time.Second))
 	fmt.Println("Done.")
 }
+
+// pipeline
+func TestPipeLine(t *testing.T) {
+
+	repeat := func(done <-chan struct{}, values ...string) <-chan interface{} {
+		c := make(chan interface{})
+		go func() {
+			defer close(c)
+
+			for {
+				for _, value := range values {
+					fmt.Println(value)
+					select {
+					case <-done:
+						return
+					case c <- value:
+					}
+				}
+			}
+		}()
+		return c
+	}
+
+	take := func(done <-chan struct{}, valueStream <-chan interface{}, num int) <-chan interface{} {
+		c := make(chan interface{})
+		go func() {
+			defer close(c)
+
+			for i := 0; i < num; i++ {
+				select {
+				case <-done:
+					return
+				case v := <-valueStream:
+					c <- v
+				}
+			}
+		}()
+
+		return c
+	}
+
+	toString := func(done <-chan struct{}, valueStream <-chan interface{}) <-chan string {
+		c := make(chan string)
+		go func() {
+			defer close(c)
+
+			for value := range valueStream {
+				select {
+				case <-done:
+					return
+				case c <- value.(string):
+				}
+
+			}
+		}()
+
+		return c
+	}
+
+	done := make(chan struct{})
+	defer close(done)
+
+	var message string
+	for value := range toString(done, take(done, repeat(done, "I", "am."), 10)) {
+		fmt.Println(value)
+		message += value
+	}
+	fmt.Println(message)
+}
