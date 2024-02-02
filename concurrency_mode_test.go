@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -154,6 +155,114 @@ func TestPipeLine(t *testing.T) {
 	for value := range toString(done, take(done, repeat(done, "I", "am."), 10)) {
 		fmt.Println(value)
 		message += value
+	}
+	fmt.Println(message)
+}
+
+// 扇出、扇入
+func TestFanInAndFanOut(t *testing.T) {
+
+	repeat := func(done <-chan struct{}, values ...string) <-chan interface{} {
+		c := make(chan interface{})
+		go func() {
+			defer close(c)
+
+			for {
+				for _, value := range values {
+					select {
+					case <-done:
+						return
+					case c <- value:
+					}
+				}
+			}
+		}()
+		return c
+	}
+	// 扇出
+	fanOut := func(done <-chan struct{}, index int, inputStream <-chan interface{}) <-chan interface{} {
+		c := make(chan interface{})
+
+		go func() {
+			defer close(c)
+
+			for input := range inputStream {
+				select {
+				case <-done:
+					return
+				default:
+				}
+
+				inputIntValue := input.(string)
+				c <- fmt.Sprintf("%s_%d|", inputIntValue, index)
+			}
+		}()
+		return c
+	}
+
+	fanIn := func(done <-chan struct{}, inputStreams ...<-chan interface{}) <-chan interface{} {
+		mergeStream := make(chan interface{})
+
+		var wg sync.WaitGroup
+		wg.Add(len(inputStreams))
+
+		for _, inputStream := range inputStreams {
+			go func(itemStream <-chan interface{}) {
+				defer wg.Done()
+
+				for value := range itemStream {
+					select {
+					case <-done:
+						return
+					default:
+					}
+					mergeStream <- value
+				}
+			}(inputStream)
+		}
+
+		go func() {
+			defer close(mergeStream)
+			wg.Wait()
+		}()
+
+		return mergeStream
+	}
+
+	take := func(done <-chan struct{}, valueStream <-chan interface{}, num int) <-chan interface{} {
+		c := make(chan interface{})
+		go func() {
+			defer close(c)
+
+			for i := 0; i < num; i++ {
+				select {
+				case <-done:
+					return
+				case v := <-valueStream:
+					c <- v
+				}
+			}
+		}()
+
+		return c
+	}
+
+	done := make(chan struct{})
+	defer close(done)
+
+	originStream := repeat(done, "I", "am.")
+	// 扇出
+	var fanOutStreams []<-chan interface{}
+	for i := 0; i < 3; i++ {
+		fanOutStreams = append(fanOutStreams, fanOut(done, i, originStream))
+	}
+	// 扇入
+	fanInStream := fanIn(done, fanOutStreams...)
+
+	var message string
+	for value := range take(done, fanInStream, 10) {
+		//fmt.Println(value)
+		message += value.(string)
 	}
 	fmt.Println(message)
 }
